@@ -24,7 +24,7 @@ def read_access_token(token_file='.dbsync_access_token_file'):
     """
     try:
         f = open(os.path.join(os.path.expanduser('~'),token_file))
-        token = f.readlines()[0]
+        token = f.readlines()[0].rstrip()
         return token
     except:
         print("Error retrieving token...exiting...")
@@ -61,10 +61,11 @@ def compute_dbdir_index(dbx, db_folder):
     subdirs = []
     index = {}
     content_hash = {}
+
     for entry in content.entries:
-        # print(entry)
         if type(entry) == dropbox.files.FileMetadata:
             file_name = entry.path_display[len(db_folder) + 1:]
+            # print(file_name)
             files.append(file_name)
             index[file_name] = entry.server_modified
             content_hash[file_name] = entry.content_hash
@@ -74,6 +75,25 @@ def compute_dbdir_index(dbx, db_folder):
             if folder_name != '':
                 # print(folder_name)
                 subdirs.append(folder_name)
+
+    while content.has_more == True:
+        content = dbx.files_list_folder_continue(content.cursor)
+
+        for entry in content.entries:
+            if type(entry) == dropbox.files.FileMetadata:
+                file_name = entry.path_display[len(db_folder) + 1:]
+                print(file_name)
+                files.append(file_name)
+                index[file_name] = entry.server_modified
+                content_hash[file_name] = entry.content_hash
+            elif type(entry) == dropbox.files.FolderMetadata:
+                folder_name = entry.path_display[len(db_folder) + 1:]
+                
+                if folder_name != '':
+                    # print(folder_name)
+                    subdirs.append(folder_name)
+
+
     return dict(files=files, subdirs=subdirs, index=index, content_hash=content_hash)
 
 def compute_content_hash(file_path):
@@ -336,7 +356,8 @@ def write_file(dbx, file_path, dest_path):
 
 def initial_check(dbx, folder, db_folder):
     print("Initial check and syncing...")
-    log_file = os.path.expanduser("~") + "/." + folder.split("/")[-1] + "_sync"   
+    log_file = os.path.expanduser("~") + "/." + folder.split("/")[-1] + "_sync"
+    print(log_file)
     # print(log_file)
     timestamp_exists = False
     try:
@@ -367,7 +388,9 @@ def initial_check(dbx, folder, db_folder):
     #If both exist then merge them
     elif db_folder_exists == True and local_folder_exists == True:
         content = compute_dbdir_index(dbx, db_folder)
+        # print(content)
         dir_id = compute_dir_index(folder)
+        #print(dir_id)
 
         #Download files that exist on dropbox but not locally
         file_diff = list(set(content['files']) - set(dir_id['files']))
@@ -394,13 +417,13 @@ def initial_check(dbx, folder, db_folder):
         #Upload files that exist locally but not on dropbox
         file_diff = list(set(dir_id['files']) - set(content['files']))
         for file_name in file_diff:
+            #print(file_diff)
             # db_time = content['index'][file_name]
-            local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(dir_id['index'][file_name])))
+            local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(dir_id['index'][file_name])))
             local_time = datetime.datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
             file_path = folder + "/" + file_name
             dest_path = db_folder + "/" + file_name
 
-            # print(local_time)
             if timestamp_exists == False or timestamp <= local_time: 
                 print("Uploading {}".format(file_name))
                 if check_folder_exists(dbx, "/".join(str(dest_path).split("/")[:-1])) == True:
@@ -459,7 +482,10 @@ def main():
     folder = args.folder
 
     folder = os.path.abspath(folder)
-    db_folder = "/" + os.path.abspath(folder).split("/")[-1]
+    #db_folder = "/" + os.path.abspath(folder).split("/")[-1]
+    db_folder = "/Apps/MobileOrg"
+    # print(db_folder)
+    
 
     log_file = initial_check(dbx, folder, db_folder)
 
@@ -467,30 +493,31 @@ def main():
     dir_id = compute_dir_index(folder)
 
     time.sleep(1)
+    #try:
+        #while True:
+    cursor, changes = dropbox_changes(dbx, cursor, folder, db_folder)
+    if changes:
+        # we made changes to the client, get new index
+        dir_id = compute_dir_index(folder)
+    time.sleep(1)
+    curr_dir_id = compute_dir_index(folder)
+    
+    # scan for changes
+    if client_changes(dbx, curr_dir_id, dir_id, folder, db_folder):
+        # we have updates dropbox get new snapshot
+        cursor = get_current_cursor(dbx, db_folder)
+    dir_id = curr_dir_id
     try:
-        while True:
-            cursor, changes = dropbox_changes(dbx, cursor, folder, db_folder)
-            if changes:
-                # we made changes to the client, get new index
-                dir_id = compute_dir_index(folder)
-            time.sleep(1)
-            curr_dir_id = compute_dir_index(folder)
-            
-            # scan for changes
-            if client_changes(dbx, curr_dir_id, dir_id, folder, db_folder):
-                # we have updates dropbox get new snapshot
-                cursor = get_current_cursor(dbx, db_folder)
-            dir_id = curr_dir_id
-            try:
-                with open(log_file, 'w') as f:
-                    current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    f.write(current_time)
-            except:
-                continue
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Exiting")
-        sys.exit()
+        with open(log_file, 'w') as f:
+            current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            f.write(current_time)
+    except:
+        print("Failed to get log file")
+        #continue
+    #time.sleep(1)
+    #except KeyboardInterrupt:
+    #    print("Exiting")
+    #    sys.exit()
 
 if __name__=="__main__":
     main()
